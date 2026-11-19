@@ -1,0 +1,45 @@
+# Workload identity at the gateway: every MCP request must carry a JWT-SVID issued by paddock's SPIRE.
+# Keys come from the SPIRE OIDC discovery provider. The tool allowlist (deploy/40) keys on jwt.sub.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: paddock-jwt-svid
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: agentgateway-proxy
+  traffic:
+    jwtAuthentication:
+      # Rejecting any request without a valid token (HTTP 401)
+      mode: Strict
+      providers:
+      - issuer: https://oidc-discovery.paddock.local
+        audiences: [paddock-gateway]
+        jwks:
+          remote:
+            backendRef:
+              group: ""
+              kind: Service
+              name: spire-spiffe-oidc-discovery-provider
+              namespace: spire
+              port: 80
+            jwksPath: /keys
+            cacheDuration: 5m
+---
+# Letting the gateway policy in agentgateway-system reference the JWKS Service in spire
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: agentgateway-jwks
+  namespace: spire
+spec:
+  from:
+  - group: agentgateway.dev
+    kind: AgentgatewayPolicy
+    namespace: agentgateway-system
+  to:
+  - group: ""
+    kind: Service
+    name: spire-spiffe-oidc-discovery-provider

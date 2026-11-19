@@ -1,0 +1,18 @@
+# kagent 0.10.4 for a fresh paddock cluster. Used by `make up` only when kagent is not installed yet.
+# The Gemini key is passed at install time from GOOGLE_API_KEY, never stored in this repo.
+providers:
+  default: gemini
+  gemini:
+    model: gemini-3.8-flash
+# Keeping k8s-agent as a quick model sanity check; turning off the other demo agents to save memory
+kgateway-agent: {enabled: false}
+istio-agent: {enabled: false}
+promql-agent: {enabled: false}
+observability-agent: {enabled: false}
+argo-rollouts-agent: {enabled: false}
+helm-agent: {enabled: false}
+cilium-policy-agent: {enabled: false}
+cilium-manager-agent: {enabled: false}
+cilium-debug-agent: {enabled: false}
+# Not accepted out of the box without a Grafana setup
+grafana-mcp: {enabled: false}

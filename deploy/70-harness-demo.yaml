@@ -1,0 +1,78 @@
+# Resume demo: a stub-brain harness as a Job. Kill its pod and the Job starts a new one,
+# which wakes on the same session and continues from the log. scripts/resume-demo.sh fills SESSION_ID.
+# Identity: spiffe://paddock.local/ns/kagent/sa/paddock-harness, via the same identity sidecar as agents.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: paddock-harness
+  namespace: kagent
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: harness-demo
+  namespace: kagent
+spec:
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        paddock.dev/agent: support-agent-harness
+        paddock.dev/sessionlog-client: "true"
+    spec:
+      serviceAccountName: SERVICE_ACCOUNT_PLACEHOLDER
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      initContainers:
+      # Native sidecar, so the Job completes when the harness exits
+      - name: identity-proxy
+        image: paddock-identity-proxy:0.1.0
+        imagePullPolicy: IfNotPresent
+        restartPolicy: Always
+        # Holding the harness until the proxy can fetch a JWT-SVID
+        startupProbe:
+          exec:
+            command: ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:15001/healthz', timeout=5)"]
+          periodSeconds: 2
+          timeoutSeconds: 8
+          failureThreshold: 60
+        resources:
+          requests: {cpu: 10m, memory: 48Mi}
+          limits: {cpu: 200m, memory: 128Mi}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: ["ALL"]}
+        volumeMounts:
+        - {name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true}
+      containers:
+      - name: harness
+        image: paddock-sessionlog:0.1.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: SESSION_ID
+          value: SESSION_ID_PLACEHOLDER
+        - name: CALLER
+          value: alice
+        - name: STEP_DELAY
+          value: "15"
+        - name: SESSIONLOG_PASSWORD
+          valueFrom:
+            secretKeyRef: {name: paddock-sessionlog-app, key: app-password}
+        - name: SESSIONLOG_DSN
+          value: postgresql://sessionlog:$(SESSIONLOG_PASSWORD)@sessionlog-db.paddock.svc.cluster.local:5432/sessionlog
+        resources:
+          requests: {cpu: 20m, memory: 64Mi}
+          limits: {cpu: 250m, memory: 192Mi}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: ["ALL"]}
+      volumes:
+      - name: spiffe-workload-api
+        csi:
+          driver: csi.spiffe.io
+          readOnly: true

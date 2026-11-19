@@ -1,0 +1,23 @@
+# Per-agent tool allowlist, enforced at the gateway.
+# Allow rules are ORed. Anything not allowed is hidden from tools/list and rejected on tools/call.
+# Identity is the SPIFFE ID in the caller's JWT-SVID (jwt.sub), verified by deploy/80-gateway-identity.yaml.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: paddock-tool-allowlist
+  namespace: paddock
+spec:
+  targetRefs:
+  - group: agentgateway.dev
+    kind: AgentgatewayBackend
+    name: paddock-tools
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+          # support-agent: read-only customer tools
+          - 'jwt.sub == "spiffe://paddock.local/ns/kagent/sa/support-agent" && mcp.tool.name in ["get_profile", "list_orders"]'
+          # resume demo harness (deploy/70): same read-only tools
+          - 'jwt.sub == "spiffe://paddock.local/ns/kagent/sa/paddock-harness" && mcp.tool.name in ["get_profile", "list_orders"]'

@@ -1,0 +1,13 @@
+# Model for paddock agents. Separate from kagent's default-model-config, which stays unchanged.
+# gemini-3.5-flash-lite supports function calling (Google model page, checked 2026-11-15).
+# Chosen because the free tier on gemini-3.8-flash allows 20 requests per day, too few for one eval run.
+apiVersion: kagent.dev/v1alpha2
+kind: ModelConfig
+metadata:
+  name: paddock-model-config
+  namespace: kagent
+spec:
+  provider: Gemini
+  model: gemini-3.5-flash-lite
+  apiKeySecret: kagent-gemini
+  apiKeySecretKey: GOOGLE_API_KEY

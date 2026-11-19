@@ -1,0 +1,62 @@
+# paddock demo MCP server. Reached only through agentgateway.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paddock-tools
+  namespace: paddock
+  labels:
+    app: paddock-tools
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: paddock-tools
+  template:
+    metadata:
+      labels:
+        app: paddock-tools
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+      - name: server
+        image: paddock-tools:0.1.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8000
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 192Mi
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paddock-tools
+  namespace: paddock
+  labels:
+    app: paddock-tools
+spec:
+  selector:
+    app: paddock-tools
+  ports:
+  - name: mcp
+    port: 8000
+    targetPort: http
+    # Telling agentgateway this port speaks MCP
+    appProtocol: agentgateway.dev/mcp

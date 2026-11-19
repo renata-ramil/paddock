@@ -1,0 +1,31 @@
+# SPIRE for paddock (spiffe/helm-charts-hardened, chart spire 0.30.4, spire-crds 0.6.1).
+# Every paddock agent pod gets spiffe://paddock.local/ns/<namespace>/sa/<serviceaccount>.
+global:
+  spire:
+    clusterName: paddock
+    trustDomain: paddock.local
+    # The iss claim in JWT-SVIDs. agentgateway checks it (deploy/80-gateway-jwt.yaml).
+    jwtIssuer: https://oidc-discovery.paddock.local
+
+spire-server:
+  controllerManager:
+    identities:
+      clusterSPIFFEIDs:
+        # Turning off the catch-all identity: only workloads paddock opts in get an SVID
+        default:
+          enabled: false
+        paddock-agents:
+          spiffeIDTemplate: spiffe://{{ .TrustDomain }}/ns/{{ .PodMeta.Namespace }}/sa/{{ .PodSpec.ServiceAccountName }}
+          namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kagent
+          podSelector:
+            matchExpressions:
+            - key: paddock.dev/agent
+              operator: Exists
+
+# Serving JWKS over plain HTTP inside the cluster; the gateway reaches it through a Service
+spiffe-oidc-discovery-provider:
+  tls:
+    spire:
+      enabled: false

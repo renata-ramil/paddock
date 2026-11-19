@@ -1,0 +1,135 @@
+# Append-only session event log (Postgres 18) for paddock harnesses.
+# Credentials live in Secret paddock-sessionlog-db, created by scripts/sessionlog-secret.sh (never committed).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sessionlog-init
+  namespace: paddock
+data:
+  01-schema.sh: |
+    #!/bin/sh
+    # Creating the event table, the append-only guard and a least-privilege app role
+    set -e
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<SQL
+    CREATE TABLE session_events (
+      session_id      text        NOT NULL,
+      seq             bigint      NOT NULL CHECK (seq > 0),
+      type            text        NOT NULL,
+      payload         jsonb       NOT NULL DEFAULT '{}'::jsonb,
+      idempotency_key text,
+      created_at      timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (session_id, seq),
+      UNIQUE (session_id, idempotency_key)
+    );
+    CREATE FUNCTION reject_change() RETURNS trigger LANGUAGE plpgsql AS \$\$
+    BEGIN
+      RAISE EXCEPTION 'session_events is append-only';
+    END \$\$;
+    CREATE TRIGGER session_events_append_only
+      BEFORE UPDATE OR DELETE OR TRUNCATE ON session_events
+      FOR EACH STATEMENT EXECUTE FUNCTION reject_change();
+    CREATE ROLE sessionlog LOGIN PASSWORD '${SESSIONLOG_PASSWORD}';
+    GRANT CONNECT ON DATABASE "$POSTGRES_DB" TO sessionlog;
+    GRANT USAGE ON SCHEMA public TO sessionlog;
+    GRANT SELECT, INSERT ON session_events TO sessionlog;
+    SQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sessionlog-db
+  namespace: paddock
+  labels:
+    app: sessionlog-db
+spec:
+  clusterIP: None
+  selector:
+    app: sessionlog-db
+  ports:
+  - name: postgres
+    port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sessionlog-db
+  namespace: paddock
+spec:
+  serviceName: sessionlog-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sessionlog-db
+  template:
+    metadata:
+      labels:
+        app: sessionlog-db
+    spec:
+      securityContext:
+        fsGroup: 70
+      containers:
+      - name: postgres
+        image: docker.io/library/postgres:18.6-alpine3.23
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: postgres
+          containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: sessionlog
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef: {name: paddock-sessionlog-db, key: admin-password}
+        - name: SESSIONLOG_PASSWORD
+          valueFrom:
+            secretKeyRef: {name: paddock-sessionlog-db, key: app-password}
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: 500m, memory: 384Mi}
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "postgres", "-d", "sessionlog"]
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        - name: init
+          mountPath: /docker-entrypoint-initdb.d
+      volumes:
+      - name: init
+        configMap:
+          name: sessionlog-init
+          defaultMode: 0555
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 1Gi
+---
+# Only session log clients may connect to the database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sessionlog-db-ingress
+  namespace: paddock
+spec:
+  podSelector:
+    matchLabels:
+      app: sessionlog-db
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          paddock.dev/sessionlog-client: "true"
+    ports:
+    - port: 5432
+      protocol: TCP

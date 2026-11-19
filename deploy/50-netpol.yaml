@@ -1,0 +1,138 @@
+# Network isolation for paddock.
+# kindnet (kind's default CNI) lists and watches NetworkPolicies; enforcement is proven with a test pod before relying on it.
+#
+# Paths allowed:
+#   agent pod  -> DNS, agentgateway proxy, kagent controller (session store), paddock session log, model API on 443
+#   kagent controller -> agent pod (A2A), agentgateway proxy (tool discovery)
+#   agentgateway proxy -> paddock-tools
+# Everything else to or from these pods is dropped.
+
+# Tool server: only the gateway proxy may connect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tools-ingress-from-gateway
+  namespace: paddock
+spec:
+  podSelector:
+    matchLabels:
+      app: paddock-tools
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: agentgateway-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: agentgateway-proxy
+    ports:
+    - port: 8000
+      protocol: TCP
+---
+# Gateway proxy: only paddock agents and the kagent controller may connect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress-from-agents
+  namespace: agentgateway-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agentgateway-proxy
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kagent
+      podSelector:
+        matchExpressions:
+        - key: paddock.dev/agent
+          operator: Exists
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kagent
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kagent
+          app.kubernetes.io/component: controller
+    ports:
+    - port: 80
+      protocol: TCP
+---
+# Agent pods: tight egress, ingress only from the kagent controller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: paddock-agents
+  namespace: kagent
+spec:
+  podSelector:
+    matchExpressions:
+    - key: paddock.dev/agent
+      operator: Exists
+  policyTypes: [Ingress, Egress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kagent
+          app.kubernetes.io/component: controller
+    ports:
+    - port: 8080
+      protocol: TCP
+  egress:
+  # DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+  # Tools, only through the gateway
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: agentgateway-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: agentgateway-proxy
+    ports:
+    - port: 80
+      protocol: TCP
+  # paddock session log (Postgres in namespace paddock)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: paddock
+      podSelector:
+        matchLabels:
+          app: sessionlog-db
+    ports:
+    - port: 5432
+      protocol: TCP
+  # kagent session and task store
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kagent
+          app.kubernetes.io/component: controller
+    ports:
+    - port: 8083
+      protocol: TCP
+  # Model API (Gemini) on 443. NetworkPolicy has no FQDN rules, so this is any public address.
+  # Private ranges are excluded, so the agent cannot reach in-cluster or LAN services this way.
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+    ports:
+    - port: 443
+      protocol: TCP
